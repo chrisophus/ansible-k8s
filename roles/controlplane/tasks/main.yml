@@ -1,5 +1,5 @@
 - name: Initialize Kubernetes cluster (only on first control-plane)
-  command: kubeadm init --control-plane-endpoint "{{ keepalived_vip }}:6443" --pod-network-cidr=10.244.0.0/16 --upload-certs
+  command: kubeadm init --control-plane-endpoint "{{ control_plane_endpoint }}" --pod-network-cidr=10.244.0.0/16 --upload-certs
   args:
     creates: /etc/kubernetes/admin.conf
   when: inventory_hostname == groups['controlplane'][0]

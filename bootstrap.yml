@@ -1,5 +1,20 @@
 ---
 # Bootstrap playbook for initial setup when you only have password access
+- name: Show which password will be used
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: Display SSH password prompt info
+      debug:
+        msg: |
+          When Ansible prompts for a password, enter the SSH login password for user "{{ hostvars[groups['all'][0]].ansible_user }}" on these hosts (same password for all):
+          {% for h in groups['all'] %}
+            - {{ h }} ({{ hostvars[h].ansible_host | default(h) }})
+          {% endfor %}
+          Use -k when running the playbook to be prompted.
+      run_once: true
+
 - name: Bootstrap SSH access with password authentication
   hosts: all
   gather_facts: no

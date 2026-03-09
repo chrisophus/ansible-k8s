@@ -11,6 +11,7 @@ host_vars/
 *.crt
 id_rsa*
 known_hosts
+keys/
 
 # Personal data
 plex-config/

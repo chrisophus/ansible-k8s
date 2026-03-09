@@ -4,58 +4,58 @@
   hosts: localhost
   connection: local
   gather_facts: no
+  vars:
+    ha_control_plane: "{{ groups['controlplane'] | length > 1 }}"
   tasks:
-    - name: Check required variables are defined
+    - name: Check required variables are defined (all topologies)
       assert:
         that:
           - network_interface is defined
+        fail_msg: |
+          ERROR: Required configuration variable is missing!
+          Set network_interface in group_vars/all.yml (e.g., eth0, enp3s0).
+        success_msg: "✅ Required configuration variables are set!"
+
+    - name: Check HA-only required variables are defined
+      assert:
+        that:
           - cluster_vip is defined
           - keepalived_password is defined
         fail_msg: |
-          ERROR: Required configuration variables are missing!
+          ERROR: HA mode requires cluster_vip and keepalived_password in group_vars/all.yml.
+        success_msg: "✅ HA configuration variables are set!"
+      when: ha_control_plane | default(false) | bool
 
-          Please copy group_vars/all.yml.example to group_vars/all.yml
-          and set the following required variables:
-
-          {% if network_interface is not defined %}
-          - network_interface: "your-ethernet-interface"  # e.g., eth0, enp3s0
-          {% endif %}
-          {% if cluster_vip is not defined %}
-          - cluster_vip: "your-vip-address"              # e.g., 192.168.1.100
-          {% endif %}
-          {% if keepalived_password is not defined %}
-          - keepalived_password: "secure-password"        # Change this!
-          {% endif %}
-        success_msg: "✅ All required configuration variables are set!"
-
-    - name: Validate IP address format
+    - name: Validate IP address format (HA only)
       assert:
         that:
           - cluster_vip | regex_search('^(\d{1,3}\.){3}\d{1,3}$') != ""
         fail_msg: "ERROR: cluster_vip '{{ cluster_vip }}' is not a valid IP address format"
         success_msg: "✅ VIP address format is valid"
+      when: ha_control_plane | default(false) | bool
 
-    - name: Check for insecure default passwords
+    - name: Check for insecure default passwords (HA only)
       assert:
         that:
           - keepalived_password != "changeme123!"
           - keepalived_password != "homelab2024!"
         fail_msg: |
           ERROR: You're using default/insecure passwords!
-
-          Please set a secure password for:
-          - keepalived_password
-
-          Use a strong, unique password.
+          Please set a secure keepalived_password in group_vars/all.yml.
         success_msg: "✅ No default passwords detected"
+      when: ha_control_plane | default(false) | bool
 
     - name: Display configuration summary
       debug:
         msg: |
           📋 Configuration Summary:
           - Network Interface: {{ network_interface }}
+          {% if ha_control_plane | default(false) | bool %}
           - Cluster VIP: {{ cluster_vip }}
           - Keepalived Password: [CONFIGURED]
+          {% else %}
+          - Topology: Single control plane (no VIP)
+          {% endif %}
 
           ✅ Configuration validation passed!
           Ready to deploy cluster.

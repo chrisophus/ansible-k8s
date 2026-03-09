@@ -1,0 +1,148 @@
+---
+# Create kubeadmin (or target_username) on all hosts with the project SSH key, then test SSH.
+# Run as root (password) once; after that use ansible_user=kubeadmin and key-based auth.
+#
+# Prerequisites:
+#   - Inventory has hosts under [all]. A project key is created in keys/id_k8s_homelab on first run.
+#   - Inventory uses ansible_ssh_private_key_file=keys/id_k8s_homelab (run from repo root).
+#
+# Usage (one root password prompt for all hosts):
+#   ansible-playbook -i inventory.ini create-ansible-user-all.yml -k -e "ansible_user=root"
+#
+# Or run this playbook directly:
+#   ansible-playbook -i inventory.ini create-ansible-user.yml -e "ansible_user=root" -k
+#
+# Optional: override user with -e "target_username=myuser"
+
+- name: Prepare on control machine
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    ansible_become: false
+  tasks:
+    - name: Display usage
+      debug:
+        msg: |
+          Use create-ansible-user-all.yml -k -e "ansible_user=root" for one run.
+          Project key: keys/id_k8s_homelab (created if missing). kubeadmin gets that key.
+      run_once: true
+
+    - name: Ensure keys directory exists
+      file:
+        path: "{{ playbook_dir }}/keys"
+        state: directory
+        mode: '0700'
+
+    - name: Create project SSH key if missing
+      openssh_keypair:
+        path: "{{ playbook_dir }}/keys/id_k8s_homelab"
+        type: rsa
+        size: 4096
+        comment: "ansible-k8s-homelab"
+        force: no
+      register: key_created
+
+    - name: Read project public key
+      set_fact:
+        ssh_public_key_content: "{{ lookup('file', playbook_dir + '/keys/id_k8s_homelab.pub') }}"
+      register: key_read
+      ignore_errors: true
+
+    - name: Fail if SSH public key not found
+      fail:
+        msg: "Project key keys/id_k8s_homelab.pub missing after create. Check keys/ directory."
+      when: key_read is failed or (ssh_public_key_content | default('') | length == 0)
+
+- name: Create non-root user (connect as root)
+  hosts: "all:!localhost"
+  gather_facts: yes
+  vars:
+    k8s_username: "{{ target_username | default('kubeadmin') }}"
+
+  tasks:
+    # useradd exit 9 = user already exists (allow it)
+    - name: Create {{ k8s_username }} user (local)
+      command: /usr/sbin/useradd -m -s /bin/bash -d /home/{{ k8s_username }} {{ k8s_username }}
+      register: useradd_result
+      failed_when: useradd_result.rc != 0 and useradd_result.rc != 9
+      changed_when: useradd_result.rc == 0
+
+    - name: Add {{ k8s_username }} to sudo group
+      user:
+        name: "{{ k8s_username }}"
+        groups: sudo
+        append: yes
+
+    - name: Set up passwordless sudo for {{ k8s_username }}
+      copy:
+        dest: "/etc/sudoers.d/{{ k8s_username }}"
+        content: "{{ k8s_username }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: '0440'
+        validate: '/usr/sbin/visudo -cf %s'
+
+    - name: Create .ssh directory for {{ k8s_username }}
+      file:
+        path: "/home/{{ k8s_username }}/.ssh"
+        state: directory
+        owner: "{{ k8s_username }}"
+        group: "{{ k8s_username }}"
+        mode: '0700'
+
+    - name: Deploy SSH public key to {{ k8s_username }}
+      authorized_key:
+        user: "{{ k8s_username }}"
+        key: "{{ hostvars['localhost']['ssh_public_key_content'] }}"
+        state: present
+        comment: "ansible-control"
+
+    - name: Verify new user can run sudo
+      command: sudo -u {{ k8s_username }} sudo -n true
+      changed_when: false
+
+    - name: Confirm user is ready
+      debug:
+        msg: "User {{ k8s_username }} is ready. Update inventory with ansible_user={{ k8s_username }} and use key-based auth (no password)."
+
+- name: Test SSH from this machine (proves key works)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    ansible_become: false
+    project_key: "{{ playbook_dir }}/keys/id_k8s_homelab"
+    cluster_hosts: "{{ groups['all'] | difference(['localhost']) | list }}"
+    k8s_username: "{{ target_username | default('kubeadmin') }}"
+  tasks:
+    - name: SSH test to each cluster host
+      command: >
+        ssh -i {{ project_key }}
+        -o BatchMode=yes -o ConnectTimeout=10
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+        -o PubkeyAcceptedAlgorithms=+ssh-rsa
+        {{ k8s_username }}@{{ hostvars[item].ansible_host | default(item) }} echo OK
+      loop: "{{ cluster_hosts }}"
+      register: ssh_tests
+      changed_when: false
+      failed_when: false
+
+    - name: Show SSH test results
+      debug:
+        msg: "{{ item.item }} ({{ hostvars[item.item].ansible_host | default(item.item) }}): {{ 'OK' if item.rc == 0 else 'FAILED (rc ' + (item.rc | string) + ')' }}"
+      loop: "{{ ssh_tests.results }}"
+
+    - name: Fail if any SSH test failed
+      fail:
+        msg: >-
+          SSH failed for: {{ ssh_tests.results
+          | selectattr('rc', 'defined')
+          | rejectattr('rc', 'equalto', 0)
+          | map(attribute='item')
+          | list
+          | join(', ') }}.
+          Re-run this playbook as root to re-deploy the key.
+      when: ssh_tests.results | selectattr('rc', 'defined') | rejectattr('rc', 'equalto', 0) | list | length > 0
+
+    - name: Next step
+      debug:
+        msg: "All hosts OK. Run: ansible -i inventory.ini all -m ping"

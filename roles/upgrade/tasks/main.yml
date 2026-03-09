@@ -124,7 +124,7 @@
 
 - name: Wait for API server to be ready
   uri:
-    url: "https://{{ keepalived_vip }}:6443/healthz"
+    url: "https://{{ control_plane_endpoint }}/healthz"
     method: GET
     validate_certs: no
   register: api_health

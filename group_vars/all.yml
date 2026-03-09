@@ -5,8 +5,12 @@ kube_target_version_short: "v1.34"
 # Container runtime (use flexible versioning)
 containerd_version: "1.7.*"
 
-# Keepalived VIP configuration
-# REQUIRED: Set these variables for your environment
+# Single vs HA control plane
+ha_control_plane: "{{ groups['controlplane'] | length > 1 }}"
+control_plane_endpoint: "{{ (cluster_vip if (groups['controlplane'] | length > 1) else hostvars[groups['controlplane'][0]].ansible_host) }}:6443"
+
+# Keepalived VIP configuration (used only when ha_control_plane is true)
+# REQUIRED for HA: Set these variables for your environment
 network_interface: "enp3s0"              # Your ethernet interface
 cluster_vip: "192.168.0.100"             # Your VIP address
 keepalived_password: "K33pAl1v3d$3cur3!"      # Secure keepalived password

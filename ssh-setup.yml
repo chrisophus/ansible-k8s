@@ -44,6 +44,13 @@
         mode: '0600'
       become: yes
 
+    - name: Build SSH config block from inventory
+      set_fact:
+        ssh_config_block: "{{ (ssh_config_block | default('')) + '  Host ' + item + '\n    HostName ' + hostvars[item].ansible_host | default(item) + '\n    User ' + (hostvars[item].ansible_user | default(ansible_user)) + '\n    IdentityFile ~/.ssh/id_' + ssh_key_type + '\n    StrictHostKeyChecking no\n    UserKnownHostsFile /dev/null\n\n' }}"
+      loop: "{{ groups['all'] }}"
+      run_once: true
+      delegate_to: "{{ groups['all'][0] }}"
+
     - name: Configure SSH client settings
       blockinfile:
         path: "/home/{{ ansible_user }}/.ssh/config"
@@ -52,18 +59,7 @@
         group: "{{ ansible_user }}"
         mode: '0644'
         marker: "# {mark} ANSIBLE MANAGED BLOCK - K8S CLUSTER"
-        block: |
-          Host plex kube1 kube2
-            User {{ ansible_user }}
-            IdentityFile ~/.ssh/id_{{ ssh_key_type }}
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
-
-          Host 192.168.0.*
-            User {{ ansible_user }}
-            IdentityFile ~/.ssh/id_{{ ssh_key_type }}
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
+        block: "{{ hostvars[groups['all'][0]].ssh_config_block }}"
       become: yes
 
     - name: Add all cluster nodes to known_hosts

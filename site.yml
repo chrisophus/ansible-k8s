@@ -6,5 +6,10 @@
 
 - hosts: controlplane
   roles:
-    - keepalived
+    - role: keepalived
+      when: ha_control_plane | default(false) | bool
     - controlplane
+
+- hosts: workers
+  roles:
+    - worker

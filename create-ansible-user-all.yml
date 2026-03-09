@@ -1,0 +1,54 @@
+---
+# One-command setup: create kubeadmin (with your SSH key) on every host.
+# Same root password on all hosts: you are prompted once.
+#
+# Prerequisites:
+#   - Inventory has the hosts under [all]. Project key keys/id_k8s_homelab is created on first run.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini create-ansible-user-all.yml -k -e "ansible_user=root"
+#
+# Then use ansible_user=kubeadmin and key-based auth for all other playbooks.
+
+# ansible_become: false so localhost tasks do not use sudo (inventory [all:vars] has ansible_become=yes).
+- name: Create kubeadmin on all hosts (one root password prompt)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    ansible_become: false
+    inventory_file: "{{ playbook_dir }}/inventory.ini"
+    create_user_playbook: "{{ playbook_dir }}/create-ansible-user.yml"
+  tasks:
+    - name: Check inventory exists
+      stat:
+        path: "{{ inventory_file }}"
+      register: inv_stat
+
+    - name: Check create-ansible-user playbook exists
+      stat:
+        path: "{{ create_user_playbook }}"
+      register: playbook_stat
+
+    - name: Fail if inventory or playbook missing
+      fail:
+        msg: "Run from repo root. Need inventory.ini and create-ansible-user.yml in {{ playbook_dir }}"
+      when: not inv_stat.stat.exists or not playbook_stat.stat.exists
+
+# Same process as above: -k prompts once, -e ansible_user=root applies to the imported play.
+- import_playbook: create-ansible-user.yml
+
+- name: Show next step
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    ansible_become: false
+    inventory_file: "{{ playbook_dir }}/inventory.ini"
+  tasks:
+    - name: Next steps
+      debug:
+        msg: |
+          kubeadmin is ready on all hosts with your SSH key.
+          Run: ansible -i {{ inventory_file }} all -m ping
+          Then: ansible-playbook -i {{ inventory_file }} site.yml
