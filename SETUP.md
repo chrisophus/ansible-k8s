@@ -66,14 +66,13 @@ ansible-playbook -i inventory.ini site.yml
 
 ## Post-Deployment: Application Setup
 
-After the cluster is running, add applications using Helm:
+After the cluster is running:
 
 ```bash
-# Example: Longhorn storage
-helm repo add longhorn https://charts.longhorn.io
-helm install longhorn longhorn/longhorn --namespace longhorn-system --create-namespace
+# Default storage (so PVCs bind)
+ansible-playbook -i inventory.ini deploy-storage.yml
 
-# Example: Monitoring stack
+# Example: Monitoring stack (Helm)
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace
 ```

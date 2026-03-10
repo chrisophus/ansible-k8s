@@ -1,0 +1,10 @@
+---
+# Deploy default storage (Rancher local-path) so PVCs can bind.
+# Run after site.yml (and optionally merge-kubeconfig.yml). Required for workloads that
+# use PersistentVolumeClaims without a storageClassName (e.g. marketplace-cp Postgres).
+
+- name: Deploy local-path StorageClass
+  hosts: "{{ groups['controlplane'][0] }}"
+  become: true
+  roles:
+    - local-path-storage

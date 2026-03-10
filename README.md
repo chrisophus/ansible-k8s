@@ -60,10 +60,16 @@ A production-grade 3-node HA Kubernetes cluster deployment using Ansible, featur
 4. **Validate configuration**:
    ```bash
    # Validate your configuration (recommended)
-   ansible-playbook validate-config.yml
+   ansible-playbook -i inventory.ini validate-config.yml
    ```
 
-5. **Deploy the cluster**:
+5. **Verify playbook syntax** (catches task/YAML errors before deploy):
+   ```bash
+   ./verify-syntax.sh
+   # Or with a specific inventory: ./verify-syntax.sh my-inventory.ini
+   ```
+
+6. **Deploy the cluster**:
    ```bash
    # Deploy base cluster
    ansible-playbook -i inventory.ini site.yml
@@ -72,16 +78,15 @@ A production-grade 3-node HA Kubernetes cluster deployment using Ansible, featur
 ## Components
 
 ### Core Cluster
-- **Kubernetes**: v1.33.x with kubeadm
+- **Kubernetes**: v1.35.x with kubeadm
 - **CNI**: Calico with IPAM
 - **Load Balancer**: keepalived with VIP
 - **Runtime**: containerd
 - **Security**: Automatic updates with scheduled reboots
 
 ### Post-Deployment Applications
-Deploy these separately using Helm:
-- **Storage**: Longhorn distributed storage
-- **Monitoring**: Prometheus/Grafana stack
+- **Storage**: Run `deploy-storage.yml` to install Rancher local-path (default StorageClass so PVCs bind). Optional: Longhorn for replicated storage (see Next Steps).
+- **Monitoring**: Prometheus/Grafana stack (Helm)
 - **Applications**: Plex, Jellyfin, or other services
 
 ## Access Points
@@ -104,10 +109,21 @@ keepalived_password: "secure-pass"  # keepalived auth
 ## Playbooks
 
 - `site.yml` - Main cluster deployment
+- `deploy-storage.yml` - Install Rancher local-path provisioner (default StorageClass). Run after `site.yml` so PVCs (e.g. Postgres) can bind.
 - `validate-config.yml` - Configuration validation
+- `merge-kubeconfig.yml` - Merge this cluster into local `~/.kube/config` (unique name, set as current context; does not overwrite existing config)
 - `reset-k8s-only.yml` - Cluster reset/cleanup
 
 ## Maintenance
+
+### Resuming after a failed run
+If the playbook fails (e.g. at `Initialize Kubernetes cluster`) and you’ve fixed the cause (e.g. containerd config, reset the node), you can resume from that task instead of re-running everything:
+
+```bash
+ansible-playbook -i inventory.ini site.yml --start-at-task "Initialize Kubernetes cluster (only on first control-plane)"
+```
+
+This skips the common, security, keepalived, and earlier controlplane tasks and runs from `kubeadm init` onward. Use a full run (no `--start-at-task`) if you changed base setup (e.g. `group_vars`, containerd, or packages).
 
 ### Adding Nodes
 See `README-adding-nodes.md` for detailed instructions.
@@ -128,9 +144,13 @@ ansible-playbook -i inventory.ini site.yml
 
 ## Next Steps: Application Deployment
 
-After your cluster is running, deploy applications using Helm:
+After your cluster is running:
 
-### Longhorn Storage
+### Storage (default StorageClass for PVCs)
+```bash
+ansible-playbook -i inventory.ini deploy-storage.yml
+```
+Installs Rancher local-path provisioner and sets it as the default StorageClass. Workloads that use PVCs without a `storageClassName` (e.g. marketplace-cp Postgres) will bind. For replicated storage instead, install Longhorn manually:
 ```bash
 helm repo add longhorn https://charts.longhorn.io
 helm repo update
@@ -148,20 +168,23 @@ helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack --
 
 ### Common Issues
 
-1. **VIP not responding**:
+1. **Control plane pods never start (runc exit 127 / permission denied)**  
+   On Ubuntu, the runc package’s AppArmor profile can block runc from loading libseccomp and starting containers. The playbook disables this profile (`aa-disable runc`) so the control plane can start. If you manage AppArmor yourself, ensure the runc profile is disabled or adjusted for Kubernetes.
+
+2. **VIP not responding**:
    ```bash
    # Check keepalived status
    ansible all -i inventory.ini -m shell -a "systemctl status keepalived"
    ```
 
-2. **Pods stuck pending**:
+3. **Pods stuck pending**:
    ```bash
    # Check node resources
    kubectl describe nodes
    kubectl get events --sort-by=.metadata.creationTimestamp
    ```
 
-3. **Storage issues**:
+4. **Storage issues**:
    ```bash
    # Check storage driver status (depends on your solution)
    kubectl get pods -n <storage-namespace>

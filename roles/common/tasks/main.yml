@@ -110,12 +110,15 @@
     mode: '0755'
   become: yes
 
-- name: Configure containerd
+- name: Configure containerd for Kubernetes CRI
   shell: |
     containerd config default > /etc/containerd/config.toml
     sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+    sed -i 's/disabled_plugins = \[.*cri.*\]/disabled_plugins = []/' /etc/containerd/config.toml
+    sed -i 's#sandbox_image = .*#sandbox_image = "{{ containerd_sandbox_image }}"#' /etc/containerd/config.toml
+    sed -i 's#BinaryName = ""#BinaryName = "{{ containerd_runc_binary }}"#' /etc/containerd/config.toml
   args:
-    creates: /etc/containerd/config.toml
+    executable: /bin/bash
   become: yes
   notify: restart containerd
 
@@ -125,6 +128,22 @@
     enabled: yes
     state: started
   become: yes
+
+# Ubuntu's runc AppArmor profile blocks libseccomp and container init; disable so control plane pods can start
+- name: Ensure apparmor-utils installed (for aa-disable)
+  apt:
+    name: apparmor-utils
+    state: present
+  when: ansible_os_family == "Debian"
+  become: yes
+
+- name: Disable runc AppArmor profile for Kubernetes
+  command: aa-disable /etc/apparmor.d/runc
+  when: ansible_os_family == "Debian"
+  become: yes
+  register: disable_runc_apparmor
+  failed_when: false
+  changed_when: disable_runc_apparmor.rc == 0
 
 - name: Install kubelet, kubeadm, kubectl
   apt:

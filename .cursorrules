@@ -1,0 +1,13 @@
+# Project rules for Ansible/Kubernetes homelab
+
+## Avoid these mistakes
+
+- **YAML + shell:** Do not put unescaped double quotes inside shell blocks in Ansible tasks (e.g. `"cri"` in sed). Ansible can misparse them. Use variables, different delimiters, or patterns that avoid `"` in the task body.
+- **localhost and become:** If a play runs on `localhost` or `connection: local`, it can still inherit `ansible_become=yes` from `[all:vars]`. Explicitly set `ansible_become: false` in that play's `vars` when the play must not use sudo (e.g. merging into the user's `~/.kube/config`).
+- **Verification:** After editing playbooks or role tasks, run `./verify-syntax.sh` (or `ansible-playbook ... --syntax-check`) so syntax/load errors are caught before the user runs the full playbook.
+
+## When editing this repo
+
+1. Run `./verify-syntax.sh` after changing any `.yml`/`.yaml` playbook or role.
+2. For any new play that uses `hosts: localhost` or `connection: local`, decide whether it should use sudo; if not, set `ansible_become: false` in the play vars.
+3. Prefer Ansible modules over raw shell when the change is simple (e.g. `lineinfile`/`replace` for one-line config) to avoid quoting and parsing issues.

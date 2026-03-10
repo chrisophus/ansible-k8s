@@ -29,6 +29,13 @@
     line: 'Unattended-Upgrade::Automatic-Reboot-Time "03:00";'
   become: yes
 
+# Allow Kubernetes API (6443) on control-plane nodes so kubectl from outside can reach the cluster
+- name: Allow Kubernetes API port on control-plane
+  command: ufw allow 6443/tcp
+  when: inventory_hostname in groups['controlplane']
+  become: yes
+  changed_when: false
+
 # Note: node_exporter and custom metrics are now handled by Kubernetes DaemonSets
 # See k8s-manifests/custom-exporters/ for container-native monitoring
 

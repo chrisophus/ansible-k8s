@@ -51,7 +51,7 @@
 
 - name: Install Calico CNI (using local server during bootstrap)
   shell: |
-    kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/tigera-operator.yaml
+    kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
     kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 create -f /tmp/calico-custom-resources.yaml
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf

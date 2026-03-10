@@ -1,0 +1,73 @@
+---
+# Install Rancher local-path provisioner so the cluster has a default StorageClass.
+# PVCs without storageClassName (e.g. Postgres for marketplace-cp) will bind.
+# Lightweight, single-node storage; suitable for dev/test. Run deploy-storage.yml after site.yml.
+
+- name: Apply local-path-provisioner manifest
+  command: >
+    kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.34/deploy/local-path-storage.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: local_path_apply
+  changed_when: "'configured' in local_path_apply.stdout or 'created' in local_path_apply.stdout"
+  become: true
+
+- name: Set local-path as default StorageClass
+  command: >
+    kubectl annotate storageclass local-path
+    storageclass.kubernetes.io/is-default-class=true
+    --overwrite
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  become: true
+
+- name: Wait for local-path-provisioner pod
+  block:
+    - name: Wait for local-path-provisioner pod to be ready
+      command: >
+        kubectl wait --for=condition=ready pod
+        -l app=local-path-provisioner
+        -n local-path-storage
+        --timeout={{ local_path_wait_timeout | default(180) }}s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: local_path_wait
+      failed_when: false
+    - name: Fail if pod did not become ready
+      fail:
+        msg: >-
+          local-path-provisioner pod did not become ready in time.
+          Run on the control-plane node: kubectl -n local-path-storage get pods -o wide
+          and: kubectl -n local-path-storage describe pod -l app=local-path-provisioner
+          to see events (e.g. ImagePullBackOff, CrashLoopBackOff).
+      when: local_path_wait.rc != 0
+  rescue:
+    - name: Show local-path-provisioner pod status (diagnostics)
+      command: >
+        kubectl -n local-path-storage get pods -l app=local-path-provisioner -o wide
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: local_path_pods_out
+      changed_when: false
+      ignore_errors: true
+    - name: Display pod list
+      debug:
+        var: local_path_pods_out.stdout_lines
+      when: local_path_pods_out.stdout_lines is defined
+    - name: Show local-path-provisioner pod events (diagnostics)
+      command: >
+        kubectl -n local-path-storage describe pod -l app=local-path-provisioner
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: local_path_describe_out
+      changed_when: false
+      ignore_errors: true
+    - name: Display pod describe output
+      debug:
+        var: local_path_describe_out.stdout_lines
+      when: local_path_describe_out.stdout_lines is defined
+    - name: Fail after showing diagnostics
+      fail:
+        msg: >-
+          local-path-provisioner pod did not become ready. Check the pod list and
+          describe output above for ImagePullBackOff, CrashLoopBackOff, or scheduling issues.
