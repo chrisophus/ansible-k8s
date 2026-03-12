@@ -83,6 +83,7 @@ A production-grade 3-node HA Kubernetes cluster deployment using Ansible, featur
 - **Load Balancer**: keepalived with VIP
 - **Runtime**: containerd
 - **Security**: Automatic updates with scheduled reboots
+- **Metrics**: metrics-server (for `kubectl top nodes` / `kubectl top pods`)
 
 ### Post-Deployment Applications
 - **Storage**: Run `deploy-storage.yml` to install Rancher local-path (default StorageClass so PVCs bind). Optional: Longhorn for replicated storage (see Next Steps).
@@ -108,11 +109,16 @@ keepalived_password: "secure-pass"  # keepalived auth
 
 ## Playbooks
 
-- `site.yml` - Main cluster deployment
+- `site.yml` - Main cluster deployment (includes metrics-server).
 - `deploy-storage.yml` - Install Rancher local-path provisioner (default StorageClass). Run after `site.yml` so PVCs (e.g. Postgres) can bind.
 - `validate-config.yml` - Configuration validation
 - `merge-kubeconfig.yml` - Merge this cluster into local `~/.kube/config` (unique name, set as current context; does not overwrite existing config)
 - `reset-k8s-only.yml` - Cluster reset/cleanup
+
+**Single-role playbooks** (no manual steps; run when you need only that component on an existing cluster):
+
+- `security.yml` - Re-run security role only (e.g. after adding UFW rules like kubelet 10250). Example: `ansible-playbook -i inventory.ini security.yml`
+- `metrics-server.yml` - Install or update metrics-server only (for `kubectl top nodes` / `kubectl top pods`). Example: `ansible-playbook -i inventory.ini metrics-server.yml`
 
 ## Maintenance
 
@@ -177,14 +183,24 @@ helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack --
    ansible all -i inventory.ini -m shell -a "systemctl status keepalived"
    ```
 
-3. **Pods stuck pending**:
+3. **Calico (CNI) not ready** (pods 0/1, "BGP not established"):
+   - **Preferred fix (no BGP):** Switch to Calico VXLAN so readiness does not depend on BGP. Run once:
+     ```bash
+     ansible-playbook -i inventory.ini switch-calico-vxlan.yml
+     ```
+     New installs use VXLAN by default (`calico_use_vxlan: true` in `group_vars/all.yml`).
+   - **Alternative (keep BGP):** Open TCP **179** between nodes (e.g. `ufw allow from <cluster_node_cidr> to any port 179 proto tcp`), re-run the security role, then `kubectl -n kube-system rollout restart daemonset calico-node`.
+   - For more detail: `ansible-playbook -i inventory.ini calico-diagnostics.yml`
+   - If nodes are NotReady, or ImagePullBackOff / CrashLoopBackOff, see README and logs.
+
+4. **Pods stuck pending**:
    ```bash
    # Check node resources
    kubectl describe nodes
    kubectl get events --sort-by=.metadata.creationTimestamp
    ```
 
-4. **Storage issues**:
+5. **Storage issues**:
    ```bash
    # Check storage driver status (depends on your solution)
    kubectl get pods -n <storage-namespace>

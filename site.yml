@@ -1,15 +1,31 @@
 ---
+# Full cluster install. Use --tags <name> to run only certain roles (e.g. --tags security).
 - hosts: all
   roles:
-    - common
-    - security
+    - role: common
+      tags: [common, always]
+    - role: security
+      tags: [security, always]
 
 - hosts: controlplane
   roles:
     - role: keepalived
       when: ha_control_plane | default(false) | bool
-    - controlplane
+      tags: [keepalived]
+    - role: controlplane
+      tags: [controlplane]
+    - role: metrics-server
+      tags: [metrics-server]
 
 - hosts: workers
   roles:
-    - worker
+    - role: worker
+      tags: [worker]
+
+# Verify networking (nodes, Calico, CoreDNS, pod DNS). Runs on first control-plane; set verify_networking: false to skip.
+- hosts: controlplane
+  gather_facts: false
+  roles:
+    - role: verify-networking
+      tags: [verify-networking, always]
+  run_once: true

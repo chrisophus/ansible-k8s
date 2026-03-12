@@ -137,13 +137,15 @@
   ignore_errors: yes
   become: yes
 
-- name: Clean up iptables rules
+# Only flush nat and mangle (kubeadm/kube-proxy). Do NOT flush filter table:
+# that can remove SSH allow rules and lock you out (e.g. UFW/default deny).
+- name: Clean up iptables rules (nat and mangle only; preserve filter for SSH)
   command: "{{ item }}"
   loop:
-    - iptables -F
     - iptables -t nat -F
+    - iptables -t nat -X
     - iptables -t mangle -F
-    - iptables -X
+    - iptables -t mangle -X
   ignore_errors: yes
   become: yes
 

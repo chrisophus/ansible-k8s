@@ -9,25 +9,49 @@ containerd_sandbox_image: "registry.k8s.io/pause:3.10.1"
 # Full path to runc so containerd finds it when systemd service has no /usr/sbin in PATH
 containerd_runc_binary: "/usr/sbin/runc"
 
-# Calico CNI version (tigera-operator manifest tag)
+# Pod network CIDR. Must match kubeadm init --pod-network-cidr and Calico (Calico reads from cluster).
+pod_network_cidr: "10.244.0.0/16"
+
+# Calico CNI version (manifest tag: calico.yaml / calico-vxlan.yaml non-operator install)
 calico_version: "v3.31.4"
+# Calico mode: true = VXLAN (UDP 4789, allow routed); false = BGP (TCP 179 between nodes).
+# site.yml uses this when installing Calico; switch-calico-vxlan.yml applies VXLAN to an existing cluster.
+calico_use_vxlan: true
+# Timeout (seconds) for waiting for calico-node DaemonSet to be ready after install.
+calico_wait_timeout: 300
 
 # Single vs HA control plane
 ha_control_plane: "{{ groups['controlplane'] | length > 1 }}"
 control_plane_endpoint: "{{ (cluster_vip if (groups['controlplane'] | length > 1) else hostvars[groups['controlplane'][0]].ansible_host) }}:6443"
 
 # Keepalived VIP configuration (used only when ha_control_plane is true)
-# REQUIRED for HA: Set these variables for your environment
-network_interface: "enp3s0"              # Your ethernet interface
-cluster_vip: "192.168.0.100"             # Your VIP address
+# Must be on the same subnet as control-plane nodes (e.g. 10.192.58.x) so you can reach API from your machine.
+# If interface is wrong, run 'ip a' on a node and set network_interface to the one with this subnet.
+network_interface: "eth0"               # Interface with node IP (often eth0 or ens3 on cloud)
+cluster_vip: "10.192.58.200"             # Unused IP in node subnet; API at https://<this>:6443
 keepalived_password: "K33pAl1v3d$3cur3!"      # Secure keepalived password
 keepalived_interface: "{{ network_interface }}"
 keepalived_vip: "{{ cluster_vip }}"
 keepalived_auth_pass: "{{ keepalived_password }}"
 keepalived_priority: 100                 # Will be overridden per host
 
+# CIDR for node IPs (control-plane + workers). Used to allow kubelet (10250) from API server for exec/logs.
+cluster_node_cidr: "10.192.58.0/24"
+
+# Security role: set to true to enable unattended-upgrades, automatic reboot timer, and reboot-required service.
+# When false (default), the security role only manages UFW (firewall rules for Kubernetes/Calico).
+security_auto_updates_enabled: false
+
 # Name used when merging this cluster into local ~/.kube/config (avoids overwriting existing "kubernetes" context)
 kubeconfig_merge_cluster_name: "homelab"
+
+# metrics-server: version tag for upstream components.yaml (for kubectl top nodes/pods)
+metrics_server_version: "v0.7.0"
+# On kubeadm, kubelet often has self-signed cert without IP SANs; set false if you use proper kubelet TLS.
+metrics_server_kubelet_insecure_tls: true
+
+# At end of site.yml, verify networking: nodes Ready, Calico/CoreDNS ready, DNS from a pod. Set false to skip.
+verify_networking: true
 
 # Storage: deploy-storage.yml installs Rancher local-path (default StorageClass).
 # For other apps (Prometheus, Plex), use Helm or Ansible as needed.

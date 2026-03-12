@@ -1,9 +1,11 @@
+# Unattended-upgrades and reboot timer: only when security_auto_updates_enabled is true.
 - name: Install unattended-upgrades
   apt:
     name: unattended-upgrades
     state: present
     update_cache: yes
   become: yes
+  when: security_auto_updates_enabled | default(false) | bool
 
 - name: Enable unattended-upgrades
   copy:
@@ -14,6 +16,7 @@
       APT::Periodic::AutocleanInterval "7";
       APT::Periodic::Unattended-Upgrade "1";
   become: yes
+  when: security_auto_updates_enabled | default(false) | bool
 
 - name: Enable automatic reboots for security updates
   lineinfile:
@@ -21,12 +24,28 @@
     regexp: '^//?Unattended-Upgrade::Automatic-Reboot '
     line: 'Unattended-Upgrade::Automatic-Reboot "true";'
   become: yes
+  when: security_auto_updates_enabled | default(false) | bool
 
 - name: Set automatic reboot time to 03:00
   lineinfile:
     path: /etc/apt/apt.conf.d/50unattended-upgrades
     regexp: '^//?Unattended-Upgrade::Automatic-Reboot-Time '
     line: 'Unattended-Upgrade::Automatic-Reboot-Time "03:00";'
+  become: yes
+  when: security_auto_updates_enabled | default(false) | bool
+
+# Ensure UFW is enabled so rules take effect (idempotent: enable only when inactive).
+- name: Check UFW status
+  command: ufw status
+  register: ufw_status_check
+  changed_when: false
+  failed_when: false
+  become: yes
+
+# Non-interactive: avoid "Proceed with operation (y|n)?" which would hang the playbook.
+- name: Enable UFW for Kubernetes networking rules
+  shell: echo y | ufw enable
+  when: ufw_status_check.rc == 0 and ('inactive' in (ufw_status_check.stdout | default('')))
   become: yes
 
 # Allow Kubernetes API (6443) on control-plane nodes so kubectl from outside can reach the cluster
@@ -36,10 +55,42 @@
   become: yes
   changed_when: false
 
+# Allow kubelet (10250) from cluster nodes so API server can proxy exec/attach/logs to pods on any node
+- name: Allow kubelet port from cluster nodes
+  command: ufw allow from {{ cluster_node_cidr }} to any port 10250 proto tcp
+  become: yes
+  changed_when: false
+
+# Calico BGP (TCP 179): only when not using VXLAN. BIRD needs 179 for node-to-node peering.
+- name: Allow Calico BGP port from cluster nodes
+  command: ufw allow from {{ cluster_node_cidr }} to any port 179 proto tcp
+  when: not (calico_use_vxlan | default(true) | bool)
+  become: yes
+  changed_when: false
+
+# Calico VXLAN (UDP 4789) and forwarded traffic: only when using VXLAN. Required for cross-node pod traffic.
+- name: Allow Calico VXLAN port from cluster nodes
+  command: ufw allow from {{ cluster_node_cidr }} to any port 4789 proto udp
+  when: calico_use_vxlan | default(true) | bool
+  become: yes
+  changed_when: false
+
+# Allow forwarded (routed) traffic so pod traffic can reach local pods (VXLAN decap or BGP/routed).
+- name: Allow UFW forwarded traffic for Calico pod network
+  command: ufw default allow routed
+  become: yes
+  changed_when: false
+
+# Reload so "default allow routed" and all rules take effect (avoids stale FORWARD policy blocking pod traffic).
+- name: Reload UFW after Kubernetes networking rules
+  command: ufw reload
+  become: yes
+  changed_when: false
+
 # Note: node_exporter and custom metrics are now handled by Kubernetes DaemonSets
 # See k8s-manifests/custom-exporters/ for container-native monitoring
 
-# Auto reboot service
+# Auto reboot service and timer: only when security_auto_updates_enabled is true.
 - name: Create reboot-required service
   copy:
     dest: /etc/systemd/system/reboot-required.service
@@ -52,6 +103,7 @@
       Type=oneshot
       ExecStart=/sbin/shutdown -r +1 "Reboot required for security updates"
   become: yes
+  when: security_auto_updates_enabled | default(false) | bool
 
 - name: Create reboot-required timer
   copy:
@@ -67,6 +119,7 @@
       [Install]
       WantedBy=timers.target
   become: yes
+  when: security_auto_updates_enabled | default(false) | bool
 
 - name: Enable and start reboot-required timer
   systemd:
@@ -74,3 +127,4 @@
     enabled: yes
     state: started
   become: yes
+  when: security_auto_updates_enabled | default(false) | bool

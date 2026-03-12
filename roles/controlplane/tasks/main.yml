@@ -1,5 +1,5 @@
 - name: Initialize Kubernetes cluster (only on first control-plane)
-  command: kubeadm init --control-plane-endpoint "{{ control_plane_endpoint }}" --pod-network-cidr=10.244.0.0/16 --upload-certs
+  command: kubeadm init --control-plane-endpoint "{{ control_plane_endpoint }}" --pod-network-cidr={{ pod_network_cidr }} --upload-certs
   args:
     creates: /etc/kubernetes/admin.conf
   when: inventory_hostname == groups['controlplane'][0]
@@ -41,25 +41,22 @@
     mode: '0644'
   become: yes
 
-- name: Copy Calico custom resources
-  copy:
-    src: ../../k8s-manifests/calico-custom-resources.yaml
-    dest: /tmp/calico-custom-resources.yaml
-    mode: '0644'
-  when: inventory_hostname == groups['controlplane'][0]
-  become: yes
-
-- name: Install Calico CNI (using local server during bootstrap)
-  shell: |
-    kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
-    kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 create -f /tmp/calico-custom-resources.yaml
+# Calico: use non-operator manifest so CNI comes up without pod networking.
+# The tigera-operator needs to reach the API at 10.96.0.1; without CNI the node is NotReady
+# and that connection can fail (i/o timeout), so the operator never creates CRDs. Applying
+# the direct manifest from the control-plane (kubectl --server=<node>:6443) avoids that.
+# VXLAN manifest does not require BGP (TCP 179); BGP manifest needs port 179 open between nodes.
+- name: Install Calico CNI (non-operator manifest, works before pod network exists)
+  shell: >
+    kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 apply -f
+    https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/{{ 'calico-vxlan.yaml' if calico_use_vxlan | default(true) else 'calico.yaml' }}
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   when: inventory_hostname == groups['controlplane'][0]
   become: yes
 
-- name: Wait for tigera-operator to be ready (using local server)
-  shell: kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 wait --for=condition=ready pod -l k8s-app=tigera-operator --namespace tigera-operator --timeout=300s
+- name: Wait for calico-node to be ready on control-plane (so node becomes Ready)
+  shell: kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout={{ calico_wait_timeout }}s
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   when: inventory_hostname == groups['controlplane'][0]
