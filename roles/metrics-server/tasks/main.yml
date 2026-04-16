@@ -1,0 +1,55 @@
+---
+# Install metrics-server so kubectl top nodes / kubectl top pods works.
+# Runs on first control-plane; uses official upstream manifest.
+# On kubeadm, kubelet often uses a self-signed cert without IP SANs, so we add
+# --kubelet-insecure-tls for metrics-server to reach kubelets (homelab/dev only).
+- name: Apply metrics-server manifest
+  shell: |
+    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/{{ metrics_server_version }}/components.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  when: inventory_hostname == groups['controlplane'][0]
+  become: yes
+  register: metrics_apply
+  changed_when: "'configured' in metrics_apply.stdout or 'created' in metrics_apply.stdout"
+
+- name: Patch metrics-server to allow kubeadm kubelet TLS (homelab)
+  shell: |
+    kubectl patch deployment metrics-server -n kube-system --type=json \
+      -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  when:
+    - inventory_hostname == groups['controlplane'][0]
+    - metrics_server_kubelet_insecure_tls | default(true) | bool
+  become: yes
+  register: metrics_patch
+  failed_when: false
+  changed_when: metrics_patch.rc == 0 and 'no change' not in (metrics_patch.stderr | default(''))
+  retries: 12
+  delay: 5
+  until: metrics_patch.rc == 0
+
+# Schedule metrics-server on the first control-plane so the API server (also on control-plane)
+# can reach it for APIService discovery without cross-node Service traffic (avoids timeout/FailedDiscoveryCheck).
+- name: Pin metrics-server to first control-plane node
+  vars:
+    first_control_plane: "{{ groups['controlplane'][0] }}"
+  shell: >
+    kubectl patch deployment metrics-server -n kube-system --type=merge
+    -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"{{ first_control_plane }}"}}}}}'
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  when: inventory_hostname == groups['controlplane'][0]
+  become: yes
+  register: metrics_node_selector_patch
+  failed_when: false
+  changed_when: metrics_node_selector_patch.rc == 0 and 'no change' not in (metrics_node_selector_patch.stderr | default(''))
+
+- name: Wait for metrics-server deployment
+  shell: |
+    kubectl rollout status deployment/metrics-server -n kube-system --timeout=120s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  when: inventory_hostname == groups['controlplane'][0]
+  become: yes

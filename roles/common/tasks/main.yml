@@ -16,6 +16,7 @@
   loop:
     - overlay
     - br_netfilter
+    - vxlan
   become: yes
 
 - name: Ensure kernel modules load on boot
@@ -24,6 +25,7 @@
     content: |
       overlay
       br_netfilter
+      vxlan
   become: yes
 
 - name: Configure sysctl for Kubernetes

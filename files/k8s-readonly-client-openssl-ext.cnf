@@ -1,0 +1,5 @@
+# Extensions for a Kubernetes client X.509 certificate (apiserver client auth).
+[ v3_client ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth

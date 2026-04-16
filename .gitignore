@@ -13,6 +13,9 @@ id_rsa*
 known_hosts
 keys/
 
+# Local kubeconfig copies (contain certificate-authority-data and client credentials)
+kubconfig
+
 # Personal data
 plex-config/
 media/

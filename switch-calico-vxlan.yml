@@ -1,0 +1,36 @@
+---
+# Switch an existing Calico BGP install to VXLAN so calico-node does not require BGP (TCP 179).
+# Run once on a cluster where calico-node pods are stuck 0/1 Ready with "BGP not established".
+# Usage: ansible-playbook -i inventory.ini switch-calico-vxlan.yml
+#
+# This applies the calico-vxlan.yaml manifest, which replaces calico-config (backend=vxlan)
+# and the calico-node DaemonSet (readiness uses -felix-ready only, no -bird-ready).
+
+- name: Switch Calico to VXLAN (no BGP)
+  hosts: "{{ groups['controlplane'][0] }}"
+  become: true
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Apply Calico VXLAN manifest (replaces ConfigMap and DaemonSet)
+      shell: >
+        kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 apply -f
+        https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico-vxlan.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_apply
+      changed_when: "'configured' in calico_apply.stdout or 'created' in calico_apply.stdout or 'unchanged' not in calico_apply.stdout"
+
+    - name: Restart calico-node DaemonSet to pick up VXLAN config
+      shell: >
+        kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 -n kube-system
+        rollout restart daemonset calico-node
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for calico-node pods to be ready
+      shell: >
+        kubectl --server=https://{{ ansible_default_ipv4.address }}:6443 wait
+        --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"

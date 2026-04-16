@@ -34,6 +34,15 @@
   become: yes
   when: security_auto_updates_enabled | default(false) | bool
 
+# UFW has its own sysctl (/etc/ufw/sysctl.conf) that overrides system settings on
+# reload/enable. Kubernetes requires ip_forward=1; UFW defaults it to 0.
+- name: Ensure UFW sysctl allows IP forwarding (required for pod networking)
+  lineinfile:
+    path: /etc/ufw/sysctl.conf
+    regexp: '^net/ipv4/ip_forward'
+    line: 'net/ipv4/ip_forward=1'
+  become: yes
+
 # Ensure UFW is enabled so rules take effect (idempotent: enable only when inactive).
 - name: Check UFW status
   command: ufw status

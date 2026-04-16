@@ -1,0 +1,7 @@
+---
+# Run only the security role (UFW, unattended-upgrades, reboot timer).
+# Use after adding new firewall rules (e.g. kubelet 10250) without re-running full site.yml.
+# Example: ansible-playbook -i inventory.ini security.yml
+- hosts: all
+  roles:
+    - security

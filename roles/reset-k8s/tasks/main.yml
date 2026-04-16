@@ -137,15 +137,35 @@
   ignore_errors: yes
   become: yes
 
-# Only flush nat and mangle (kubeadm/kube-proxy). Do NOT flush filter table:
-# that can remove SSH allow rules and lock you out (e.g. UFW/default deny).
-- name: Clean up iptables rules (nat and mangle only; preserve filter for SSH)
+- name: Clean up iptables nat and mangle tables
   command: "{{ item }}"
   loop:
     - iptables -t nat -F
     - iptables -t nat -X
     - iptables -t mangle -F
     - iptables -t mangle -X
+  ignore_errors: yes
+  become: yes
+
+# Remove stale Calico (cali-*) and kube-proxy (KUBE-*) chains/rules from the
+# filter table while preserving UFW rules (which keep SSH open).
+# NOTE: iptables-restore can reset sysctl values (ip_forward, bridge-nf-call-iptables).
+# The sysctl task below re-applies them.
+- name: Remove stale Calico and kube-proxy iptables rules from filter table
+  shell: iptables-save | grep -v -E 'cali-|cali:|KUBE-' | iptables-restore
+  ignore_errors: yes
+  become: yes
+
+- name: Re-apply sysctl after iptables-restore (it can reset ip_forward)
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop:
+    - { name: net.ipv4.ip_forward, value: 1 }
+    - { name: net.bridge.bridge-nf-call-iptables, value: 1 }
+    - { name: net.bridge.bridge-nf-call-ip6tables, value: 1 }
   ignore_errors: yes
   become: yes
 

@@ -1,0 +1,191 @@
+---
+# Issue an X.509 client cert for Kubernetes User {{ k8s_readonly_client_username }} (CN),
+# bind that user to the built-in ClusterRole "view", and build a kubeconfig.
+#
+# This repo installs the cluster with kubeadm (roles/controlplane). kubeadm keeps the
+# cluster CA and admin kubeconfig on the first control-plane at fixed paths:
+#   /etc/kubernetes/pki/ca.crt, ca.key   — sign new client certs the apiserver trusts
+#   /etc/kubernetes/admin.conf           — kubectl apply RBAC (same as site.yml)
+# Other bootstraps would need different paths or a CSR-based flow instead.
+#
+# Example:
+#   ansible-playbook -i inventory.ini create-k8s-readonly-client-cert.yml
+#
+# Kubeconfig is fetched to the Ansible controller under k8s_readonly_fetch_dest_dir
+# (see group_vars/all.yml). Key material remains on the node in k8s_readonly_workdir
+# until you remove it.
+#
+# Fetch uses a separate localhost play (no delegate_to) so the controller never inherits
+# the control-plane play's become/sudo — some Ansible versions still escalate on localhost when delegating.
+
+- name: Issue readonly client cert and kubeconfig
+  hosts: "{{ groups['controlplane'][0] }}"
+  gather_facts: false
+  become: true
+  vars:
+    k8s_readonly_workdir: "/tmp/ansible-k8s-readonly-client-{{ k8s_readonly_client_username }}"
+    k8s_readonly_kubeconfig_remote: "{{ k8s_readonly_workdir }}/kubeconfig"
+    k8s_readonly_cluster_kubeconfig_name: "{{ kubeconfig_merge_cluster_name }}-readonly"
+  tasks:
+    - name: Require kubeadm PKI and admin kubeconfig
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: k8s_readonly_pki_stat
+      loop:
+        - /etc/kubernetes/pki/ca.crt
+        - /etc/kubernetes/pki/ca.key
+        - /etc/kubernetes/admin.conf
+
+    - name: Fail if cluster PKI is missing
+      ansible.builtin.fail:
+        msg: "Expected kubeadm files on first control-plane: /etc/kubernetes/pki/ca.crt, ca.key, and /etc/kubernetes/admin.conf."
+      when: k8s_readonly_pki_stat.results | selectattr('stat.exists', 'equalto', false) | list | length > 0
+
+    - name: Create work directory
+      ansible.builtin.file:
+        path: "{{ k8s_readonly_workdir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Install OpenSSL extension file for client auth
+      ansible.builtin.copy:
+        src: k8s-readonly-client-openssl-ext.cnf
+        dest: "{{ k8s_readonly_workdir }}/openssl-ext.cnf"
+        mode: "0644"
+
+    - name: Render ClusterRoleBinding (view) for client user
+      ansible.builtin.template:
+        src: k8s-readonly-client-rbac.yaml.j2
+        dest: "{{ k8s_readonly_workdir }}/rbac.yaml"
+        mode: "0644"
+
+    - name: Apply RBAC
+      ansible.builtin.command: kubectl apply -f "{{ k8s_readonly_workdir }}/rbac.yaml"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: k8s_readonly_rbac_apply
+      changed_when: "'configured' in k8s_readonly_rbac_apply.stdout or 'created' in k8s_readonly_rbac_apply.stdout"
+
+    - name: Generate client private key
+      ansible.builtin.command: openssl genrsa -out tls.key 2048
+      args:
+        chdir: "{{ k8s_readonly_workdir }}"
+        creates: "{{ k8s_readonly_workdir }}/tls.key"
+
+    - name: Create certificate signing request
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -key
+          - tls.key
+          - -out
+          - tls.csr
+          - -subj
+          - "/CN={{ k8s_readonly_client_username }}/O={{ k8s_readonly_client_org }}"
+      args:
+        chdir: "{{ k8s_readonly_workdir }}"
+      changed_when: true
+
+    - name: Sign client certificate with cluster CA
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - tls.csr
+          - -CA
+          - /etc/kubernetes/pki/ca.crt
+          - -CAkey
+          - /etc/kubernetes/pki/ca.key
+          - -CAcreateserial
+          - -out
+          - tls.crt
+          - -days
+          - "{{ k8s_readonly_cert_validity_days | string }}"
+          - -sha256
+          - -extensions
+          - v3_client
+          - -extfile
+          - openssl-ext.cnf
+      args:
+        chdir: "{{ k8s_readonly_workdir }}"
+      changed_when: true
+
+    - name: Build kubeconfig (cluster, credentials, context)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        KCFG="{{ k8s_readonly_kubeconfig_remote }}"
+        rm -f "$KCFG"
+        kubectl config set-cluster "{{ k8s_readonly_cluster_kubeconfig_name }}" \
+          --server="https://{{ control_plane_endpoint }}" \
+          --certificate-authority=/etc/kubernetes/pki/ca.crt \
+          --embed-certs=true \
+          --kubeconfig="$KCFG"
+        kubectl config set-credentials "{{ k8s_readonly_client_username }}" \
+          --client-certificate="{{ k8s_readonly_workdir }}/tls.crt" \
+          --client-key="{{ k8s_readonly_workdir }}/tls.key" \
+          --embed-certs=true \
+          --kubeconfig="$KCFG"
+        kubectl config set-context "{{ k8s_readonly_client_username }}@{{ k8s_readonly_cluster_kubeconfig_name }}" \
+          --cluster="{{ k8s_readonly_cluster_kubeconfig_name }}" \
+          --user="{{ k8s_readonly_client_username }}" \
+          --kubeconfig="$KCFG"
+        kubectl config use-context "{{ k8s_readonly_client_username }}@{{ k8s_readonly_cluster_kubeconfig_name }}" \
+          --kubeconfig="$KCFG"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Restrict kubeconfig permissions on node
+      ansible.builtin.file:
+        path: "{{ k8s_readonly_kubeconfig_remote }}"
+        mode: "0600"
+
+    - name: Allow SSH user to read kubeconfig for fetch
+      ansible.builtin.file:
+        path: "{{ k8s_readonly_kubeconfig_remote }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      when: k8s_readonly_fetch_artifacts | bool
+
+- name: Prepare artifact directory on Ansible controller (localhost, no sudo)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Ensure local artifact directory on Ansible controller
+      ansible.builtin.file:
+        path: "{{ k8s_readonly_fetch_dest_dir | expanduser }}"
+        state: directory
+        mode: "0700"
+      when: k8s_readonly_fetch_artifacts | bool
+
+- name: Fetch kubeconfig to Ansible controller
+  hosts: "{{ groups['controlplane'][0] }}"
+  gather_facts: false
+  become: false
+  vars:
+    k8s_readonly_workdir: "/tmp/ansible-k8s-readonly-client-{{ k8s_readonly_client_username }}"
+    k8s_readonly_kubeconfig_remote: "{{ k8s_readonly_workdir }}/kubeconfig"
+    k8s_readonly_cluster_kubeconfig_name: "{{ kubeconfig_merge_cluster_name }}-readonly"
+  tasks:
+    - name: Fetch readonly kubeconfig to controller
+      ansible.builtin.fetch:
+        src: "{{ k8s_readonly_kubeconfig_remote }}"
+        dest: "{{ k8s_readonly_fetch_dest_dir | expanduser }}/{{ kubeconfig_merge_cluster_name }}-readonly.kubeconfig"
+        flat: true
+      when: k8s_readonly_fetch_artifacts | bool
+
+    - name: Show artifact path
+      ansible.builtin.debug:
+        msg: >-
+          Read-only kubeconfig (cluster-wide view) on controller:
+          {{ k8s_readonly_fetch_dest_dir | expanduser }}/{{ kubeconfig_merge_cluster_name }}-readonly.kubeconfig
+          (context {{ k8s_readonly_client_username }}@{{ kubeconfig_merge_cluster_name }}-readonly).
+          Key material remains on {{ inventory_hostname }} in {{ k8s_readonly_workdir }}; delete that directory when you no longer need it on the node.
+      when: k8s_readonly_fetch_artifacts | bool

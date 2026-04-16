@@ -1,0 +1,85 @@
+---
+# Run on first control-plane to gather Calico pod status, events, and logs.
+# Usage: ansible-playbook -i inventory.ini calico-diagnostics.yml
+
+- name: Calico CNI diagnostics
+  hosts: "{{ groups['controlplane'][0] }}"
+  become: true
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Get node status
+      command: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_nodes
+      changed_when: false
+
+    - name: Display nodes
+      debug:
+        var: calico_nodes.stdout_lines
+
+    - name: Get calico-node pods
+      command: kubectl get pods -n kube-system -l k8s-app=calico-node -o wide
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_node_pods
+      changed_when: false
+
+    - name: Display calico-node pods
+      debug:
+        var: calico_node_pods.stdout_lines
+
+    - name: Get calico-kube-controllers pods
+      command: kubectl get pods -n kube-system -l k8s-app=calico-kube-controllers -o wide
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_controllers_pods
+      changed_when: false
+
+    - name: Display calico-kube-controllers pods
+      debug:
+        var: calico_controllers_pods.stdout_lines
+
+    - name: Describe calico-node pods (events and status)
+      command: kubectl describe pods -n kube-system -l k8s-app=calico-node
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_describe
+      changed_when: false
+
+    - name: Display calico-node describe output
+      debug:
+        var: calico_describe.stdout_lines
+
+    - name: Get recent events in kube-system
+      command: kubectl get events -n kube-system --sort-by=.metadata.creationTimestamp --field-selector involvedObject.kind=Pod
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_events
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display recent pod events
+      debug:
+        var: calico_events.stdout_lines
+      when: calico_events.stdout_lines is defined
+
+    - name: Get calico-node container logs (first pod, last 80 lines)
+      shell: |
+        pod=$(kubectl -n kube-system get pods -l k8s-app=calico-node -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$pod" ]; then
+          kubectl -n kube-system logs "$pod" -c calico-node --tail=80 2>&1
+        else
+          echo "No calico-node pod found"
+        fi
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_logs
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display calico-node logs
+      debug:
+        var: calico_logs.stdout_lines
+      when: calico_logs.stdout_lines is defined

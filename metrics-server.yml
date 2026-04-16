@@ -1,0 +1,7 @@
+---
+# Run only the metrics-server role (so kubectl top nodes / kubectl top pods works).
+# Use on an existing cluster without re-running full site.yml.
+# Example: ansible-playbook -i inventory.ini metrics-server.yml
+- hosts: controlplane
+  roles:
+    - metrics-server

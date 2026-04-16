@@ -1,0 +1,17 @@
+# Cluster-wide read-only: built-in ClusterRole "view".
+# Client cert CN must match subjects[0].name (Kubernetes User name).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ k8s_readonly_client_username | replace('_', '-') }}-view
+  labels:
+    app.kubernetes.io/name: homelab-readonly-client
+    app.kubernetes.io/component: rbac-readonly-client
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: {{ k8s_readonly_client_username }}

@@ -113,6 +113,7 @@ keepalived_password: "secure-pass"  # keepalived auth
 - `deploy-storage.yml` - Install Rancher local-path provisioner (default StorageClass). Run after `site.yml` so PVCs (e.g. Postgres) can bind.
 - `validate-config.yml` - Configuration validation
 - `merge-kubeconfig.yml` - Merge this cluster into local `~/.kube/config` (unique name, set as current context; does not overwrite existing config)
+- `create-k8s-readonly-client-cert.yml` - For **kubeadm** clusters (this repo): bind `k8s_readonly_client_username` to built-in `view`, sign an X.509 client cert with `/etc/kubernetes/pki/ca.{crt,key}` on the first control-plane, and fetch a read-only kubeconfig to the Ansible controller (see `group_vars/all.yml`)
 - `reset-k8s-only.yml` - Cluster reset/cleanup
 
 **Single-role playbooks** (no manual steps; run when you need only that component on an existing cluster):

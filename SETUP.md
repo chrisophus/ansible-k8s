@@ -93,6 +93,14 @@ kubectl get svc --all-namespaces
 kubectl cluster-info
 ```
 
+## Pod networking (Calico VXLAN)
+
+The playbook loads the `vxlan` kernel module and configures UFW (UDP 4789, `default allow routed`). If the verify-networking step still fails with DNS timeouts:
+
+1. Re-run the security role so UFW rules and reload are applied: `ansible-playbook site.yml --tags security`
+2. Restart Calico on all nodes so it re-creates VXLAN interfaces: `kubectl rollout restart daemonset calico-node -n kube-system`
+3. If problems persist, **reboot the nodes** once. A reboot can clear stale iptables or kernel state and is often needed when firewall or module config was changed after the cluster was already running.
+
 ## Security Reminders
 
 - [ ] Changed keepalived default password

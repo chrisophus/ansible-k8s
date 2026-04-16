@@ -55,3 +55,12 @@ verify_networking: true
 
 # Storage: deploy-storage.yml installs Rancher local-path (default StorageClass).
 # For other apps (Prometheus, Plex), use Helm or Ansible as needed.
+
+# create-k8s-readonly-client-cert.yml — X.509 client user with built-in ClusterRole "view"
+# (Assumes kubeadm layout on the first control-plane; see playbook header.)
+k8s_readonly_client_username: pre-dev-readonly
+k8s_readonly_client_org: homelab-readonly
+k8s_readonly_cert_validity_days: 365
+k8s_readonly_fetch_artifacts: true
+# Directory on the Ansible controller; ~ expands when the playbook runs
+k8s_readonly_fetch_dest_dir: "~/.kube/{{ kubeconfig_merge_cluster_name }}-readonly-client"
