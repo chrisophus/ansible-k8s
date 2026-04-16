@@ -1,5 +1,36 @@
-# Cluster-wide read-only: built-in ClusterRole "view".
-# Client cert CN must match subjects[0].name (Kubernetes User name).
+# Read-only client user (X.509 CN = subjects[].name).
+# - Built-in ClusterRole "view": read most namespaced objects; no secrets.
+# - Custom ClusterRole below: "view" does not include list/get nodes at cluster scope,
+#   so kubectl get nodes / describe node would be Forbidden without these rules.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ k8s_readonly_client_username | replace('_', '-') }}-readonly-extras
+  labels:
+    app.kubernetes.io/name: homelab-readonly-client
+    app.kubernetes.io/component: rbac-readonly-client-extras
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/status"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ k8s_readonly_client_username | replace('_', '-') }}-readonly-extras
+  labels:
+    app.kubernetes.io/name: homelab-readonly-client
+    app.kubernetes.io/component: rbac-readonly-client-extras
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ k8s_readonly_client_username | replace('_', '-') }}-readonly-extras
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: {{ k8s_readonly_client_username }}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

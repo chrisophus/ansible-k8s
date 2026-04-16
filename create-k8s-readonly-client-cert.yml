@@ -1,6 +1,7 @@
 ---
 # Issue an X.509 client cert for Kubernetes User {{ k8s_readonly_client_username }} (CN),
-# bind that user to the built-in ClusterRole "view", and build a kubeconfig.
+# bind that user to the built-in ClusterRole "view" plus a small extra ClusterRole for
+# read-only nodes/nodes/status ("view" alone does not allow kubectl get nodes).
 #
 # This repo installs the cluster with kubeadm (roles/controlplane). kubeadm keeps the
 # cluster CA and admin kubeconfig on the first control-plane at fixed paths:
@@ -15,8 +16,9 @@
 # (see group_vars/all.yml). Key material remains on the node in k8s_readonly_workdir
 # until you remove it.
 #
-# Fetch uses a separate localhost play (no delegate_to) so the controller never inherits
-# the control-plane play's become/sudo — some Ansible versions still escalate on localhost when delegating.
+# Fetch uses separate plays without sudo on the controller or for fetch:
+# - inventory [all:vars] often sets ansible_become=yes; implicit localhost inherits it, so these plays
+#   set ansible_become: false in vars (play become: false alone is not enough).
 
 - name: Issue readonly client cert and kubeconfig
   hosts: "{{ groups['controlplane'][0] }}"
@@ -144,11 +146,20 @@
         path: "{{ k8s_readonly_kubeconfig_remote }}"
         mode: "0600"
 
-    - name: Allow SSH user to read kubeconfig for fetch
+    # Workdir was created as root (0700); only chowning the file is not enough — SSH user
+    # cannot traverse the directory, and fetch (without become) then fails on stat/read.
+    - name: Allow SSH user to traverse workdir and read kubeconfig for fetch
       ansible.builtin.file:
-        path: "{{ k8s_readonly_kubeconfig_remote }}"
+        path: "{{ k8s_readonly_workdir }}"
+        state: directory
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
+        recurse: true
+      when: k8s_readonly_fetch_artifacts | bool
+
+    - name: Tighten kubeconfig mode after recursive chown
+      ansible.builtin.file:
+        path: "{{ k8s_readonly_kubeconfig_remote }}"
         mode: "0600"
       when: k8s_readonly_fetch_artifacts | bool
 
@@ -157,6 +168,9 @@
   connection: local
   gather_facts: false
   become: false
+  vars:
+    # Override inventory [all:vars] ansible_become=yes (implicit localhost is still in group "all").
+    ansible_become: false
   tasks:
     - name: Ensure local artifact directory on Ansible controller
       ansible.builtin.file:
@@ -170,6 +184,7 @@
   gather_facts: false
   become: false
   vars:
+    ansible_become: false
     k8s_readonly_workdir: "/tmp/ansible-k8s-readonly-client-{{ k8s_readonly_client_username }}"
     k8s_readonly_kubeconfig_remote: "{{ k8s_readonly_workdir }}/kubeconfig"
     k8s_readonly_cluster_kubeconfig_name: "{{ kubeconfig_merge_cluster_name }}-readonly"
